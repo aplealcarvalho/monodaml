@@ -1,11 +1,4 @@
 
-
-This is a rudementary 
-
-# Disclaimer
-
-**The purpose of this repository is to provide clear instructions and guidelines for Daml learners to pass the Daml Fundamentals certification via their capstone project. Please bear in mind that any code within is provided for illustrative purposes only, and as such may not be production quality and/or may not fit your use-cases. You may use the contents of this repository in parts or in whole according to the BSD0 license:**
-
 ---
 
 # Daml Fundamentals Certification Mandatory Project
