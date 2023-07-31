@@ -1,0 +1,126 @@
+module Game.Turn where
+
+import Game.PlayerProfile
+import Game.Square
+import Game.Data
+import DA.Optional (fromSome)
+import DA.Action (when)
+
+template Turn
+    with
+        bank : Party
+        player : Party
+        squareId : Int
+        roll : (Int, Int)
+        timestamp : Time
+        result : Optional (Either (ContractId FundsPayment) (ContractId BuyProposal))
+    where
+        signatory bank
+
+
+template BuyProposal
+    with
+        value : Int
+        bank : Party
+        player : Party
+        token : PlayingTokens
+        squareId : Int
+    where
+        signatory bank
+        observer player
+        
+        choice AcceptProperty : ContractId Receipt
+            controller player
+                do
+                    create Receipt with
+                        receiptType = PayProposal
+                        ..
+
+template FundsPayment
+    with
+        value : Int
+        bank : Party
+        player : Party
+        token : PlayingTokens
+        squareId : Int
+    where
+        signatory bank
+        observer player
+        
+        choice Pay : ContractId Receipt
+            controller player
+                do
+                    create Receipt with
+                        receiptType = PayFunds
+                        ..
+
+template Receipt
+    with
+        value : Int
+        bank : Party
+        player : Party
+        squareId : Int
+        token : PlayingTokens
+        receiptType : ReceiptType
+    where
+        signatory player
+        observer bank
+
+        choice ChangeOwnership : ContractId CompletedReceipt
+            controller bank
+                do
+                    assert (receiptType == PayProposal)
+                    (profileCid, profile@Profile{..})  <- fetchByKey (token, bank)
+                    -- change the profile of the player
+                    archive profileCid
+                    let newBalance = balance + value
+                    assertMsg "Insufficient Funds to buy property" (newBalance >= 0)
+                    create profile with
+                        properties = (squareId :: profile.properties) 
+                        balance = newBalance
+
+                    -- change square
+                    (squareCid, square@Square{owner})  <- fetchByKey (squareId, bank)
+                    assertMsg "Property is already owned" (owner == None)
+
+                    archive squareCid
+                    create square with
+                        owner = Some token
+
+                    create CompletedReceipt with ..
+
+        choice TransferFunds : ContractId CompletedReceipt
+            controller bank
+                do 
+                    assert (receiptType == PayFunds)
+                    -- check square, square doesn't change
+                    (squareCid, square@Square{owner,squareType})  <- fetchByKey (squareId, bank)
+
+                    (profilePlayerCid, profilePlayer@Profile{..})  <- fetchByKey (token, bank)
+
+                    -- change the profile of the player moved to square
+                    archive profilePlayerCid
+                    let newBalancePlayer = balance + value
+                    profilePlayerCid <- create profilePlayer with
+                        balance = newBalancePlayer
+
+                    when ((squareType == Some Property || squareType == Some TrainStation) && owner /= None) do
+                        (profileOwnerCid, profileOwner@Profile{..})  <- fetchByKey (fromSome owner, bank)
+                        archive profileOwnerCid
+                        let newBalanceOwner = profileOwner.balance - value
+                        create profileOwner with balance = newBalanceOwner
+                        pure()
+                    
+                    create CompletedReceipt with ..
+
+
+template CompletedReceipt
+    with
+        value : Int
+        bank : Party
+        player : Party
+        squareId : Int
+        token : PlayingTokens
+    where
+        signatory player
+        observer bank

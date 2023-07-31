@@ -1,0 +1,21 @@
+module Game.Data where
+
+
+data PlayingTokens = Scottie | TopHat | Car | Boot | Iron | Thimble | Cannon | Wheelbarrow
+  deriving (Eq, Show)
+
+data SquareType =  Property | Company |  TrainStation
+  deriving (Eq, Show)
+
+data Color = Blue | Cyan | Brown | Pink | Orange | Red | Yellow | Green
+  deriving (Eq, Show)
+
+data PlayAction = Buy | Rent | Tax | DoNothing
+  deriving (Eq, Show)
+
+data ReceiptType = PayProposal | PayFunds
+  deriving (Eq, Show)
+
+data LedgerParties = LedgerParties with
+  bank : Party
+  players : [(PlayingTokens,Party)]

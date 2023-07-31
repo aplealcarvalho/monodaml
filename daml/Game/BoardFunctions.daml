@@ -1,0 +1,93 @@
+module Game.BoardFunctions where
+
+import Game.Square
+import Game.Data
+import Game.PlayerProfile
+
+import Daml.Script
+
+checkIfNoProfileBankrupt : [Profile] -> Bool
+checkIfNoProfileBankrupt [] = True
+checkIfNoProfileBankrupt (h@Profile{..}::t) =
+    if (h.balance >= 0) then checkIfNoProfileBankrupt t
+    else False
+
+checkSquareOwnership : PlayingTokens ->  Square -> PlayAction
+checkSquareOwnership token square@Square{owner, bank, squareType}
+    | squareType == None = DoNothing
+    | owner /= None && Some token /= owner = Rent
+    | otherwise = Buy
+
+rearrangeList : (PlayingTokens, Party) -> [(PlayingTokens, Party)] -> [(PlayingTokens, Party)]
+rearrangeList currentPlayer [] = [currentPlayer]
+rearrangeList currentPlayer ((ht,hp)::t) = if (currentPlayer._1 == ht) then rearrangeList currentPlayer t
+                                     else (ht,hp) :: rearrangeList currentPlayer t 
+
+move : Int -> (Int, Int) -> Int
+move location (0, 0) = location
+move location (dice1, 0) = 
+    if (location + dice1 > 40) then move 0 (dice1 - (40 - location), 0)
+    else (location + dice1)
+move location (dice1, dice2) = 
+    if (location + dice2 > 40) then move 0 (dice1, dice2 - (40 - location))
+    else move (location + dice2) (dice1, 0)
+
+buildSquares : Optional SquareType -> Optional Color -> Text -> Int -> Int -> Party -> [(PlayingTokens,Party)] -> Square
+buildSquares squareType color name value id bank players = Square with 
+    owner = None
+    bank
+    name
+    players
+    occupied = map (._1) players
+    value
+    id
+    squareType
+    color
+
+setupSquares : Party -> [(PlayingTokens, Party)] -> Script ([Square])
+setupSquares bank players = script do
+    let brown = Brown
+    let squares = buildSquares (None) (None) "JailInside" (0) (-1) bank [] ::
+                  buildSquares (None) (None) "Start" 200 0 bank players ::
+                  buildSquares (Some Property) (Some Brown) "Mediterranean Avenue" (-60) 1 bank [] ::
+                  buildSquares (None) (None) "Community Chest" 0 2 bank [] ::
+                  buildSquares (Some Property) (Some Brown) "Baltic Avenue" (-60) 3 bank [] ::
+                  buildSquares (None) (None) "Income Tax" (-200) 4 bank [] ::
+                  buildSquares (Some TrainStation) (None) "Reading Railroad" (-200) 5 bank [] ::
+                  buildSquares (Some Property) (Some Cyan) "Oriental Avenue" (-100) 6 bank [] ::
+                  buildSquares (None) (None) "Chance" (0) 7 bank [] ::
+                  buildSquares (Some Property) (Some Cyan) "Vermont Avenue" (-100) 8 bank [] ::
+                  buildSquares (Some Property) (Some Cyan) "Connecticut Avenue" (-120) 9 bank [] ::
+                  buildSquares (None) (None) "JailVisitant" (0) 10 bank [] ::
+                  buildSquares (Some Property) (Some Pink) "St. Charles Place" (-140) 11 bank [] ::
+                  buildSquares (Some Company) (None) "Electric Company" (-150) 12 bank [] ::
+                  buildSquares (Some Property) (Some Pink) "States Avenue" (-140) 13 bank [] ::
+                  buildSquares (Some Property) (Some Pink) "Virginia Avenue" (-160) 14 bank [] ::
+                  buildSquares (Some TrainStation) (None) "Pennsylvania Railroad" (-200) 15 bank [] ::
+                  buildSquares (Some Property) (Some Orange) "St. James Place" (-180) 16 bank [] ::
+                  buildSquares (None) (None) "Community Chest" (0) 17 bank [] ::
+                  buildSquares (Some Property) (Some Orange) "Tennessee Avenue" (-180) 18 bank [] ::
+                  buildSquares (Some Property) (Some Orange) "New York Avenue" (-200) 19 bank [] ::
+                  buildSquares (None) (None) "Free Parking" (0) 20 bank [] ::
+                  buildSquares (Some Property) (Some Red) "Kentucky Avenue" (-220) 21 bank [] ::
+                  buildSquares (None) (None) "Chance" (0) 22 bank [] ::
+                  buildSquares (Some Property) (Some Red) "Indiana Avenue" (-220) 23 bank [] ::
+                  buildSquares (Some Property) (Some Red) "Illinois Avenue" (-240) 24 bank [] ::
+                  buildSquares (Some TrainStation) (None) "B&O Railroad" (-200) 25 bank [] ::
+                  buildSquares (Some Property) (Some Yellow) "Atlantic Avenue" (-260) 26 bank [] ::
+                  buildSquares (Some Property) (Some Yellow) "Ventnor Avenue" (-260) 27 bank [] ::
+                  buildSquares (Some Company) (None) "Water Works" (-180) 28 bank [] ::
+                  buildSquares (Some Property) (Some Yellow) "Marvin Gardens" (-280) 29 bank [] ::
+                  buildSquares (None) (None) "Go to Jail" (0) 30 bank [] ::
+                  buildSquares (Some Property) (Some Green) "Pacific Avenue" (-300) 31 bank [] ::
+                  buildSquares (Some Property) (Some Green) "North Carolina Avenue" (-300) 32 bank [] ::
+                  buildSquares (None) (None) "Community Chest" (0) 33 bank [] ::
+                  buildSquares (Some Property) (Some Green) "Pennsylvania Avenue" (-320) 34 bank [] ::
+                  buildSquares (Some TrainStation) (None) "Short Line" (-200) 35 bank [] ::
+                  buildSquares (None) (None) "Chance" (0) 36 bank [] ::
+                  buildSquares (Some Property) (Some Blue) "Pennsylvania Avenue" (-350) 37 bank [] ::
+                  buildSquares (None) (None) "Luxury Tax" (-100) 38 bank [] ::
+                  buildSquares (Some Property) (Some Blue) "Pennsylvania Avenue" (-400) 39 bank [] ::
+                    []
+
+    pure (squares)

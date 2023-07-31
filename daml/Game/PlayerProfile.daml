@@ -1,0 +1,22 @@
+module Game.PlayerProfile where
+
+import Game.Data
+
+template Profile 
+    with
+        player : Party
+        bank : Party
+        balance : Int
+        token : PlayingTokens
+        squareId : Int
+        properties : [Int]
+    where
+        signatory bank
+        key (token, bank) : (PlayingTokens, Party)
+        maintainer key._2
+
+        choice AcceptBuy : ContractId Profile
+            controller bank
+            do
+                
+                create this 

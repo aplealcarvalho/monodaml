@@ -1,0 +1,176 @@
+module Game.Board where
+
+import Game.Square
+import Game.BoardFunctions
+import Game.Turn
+import Game.Data
+import Game.PlayerProfile
+
+import Daml.Script
+import DA.Foldable (mapA_)
+import DA.List (head, delete)
+
+template Board
+  with
+    bank : Party
+    players : [(PlayingTokens, Party)]
+    turn : PlayingTokens
+    turns : [ContractId Turn]
+    taxFunds : Int
+  where
+    ensure length players > 1
+    signatory bank
+    observer map (._2) players
+    key bank : Party
+    maintainer key
+  
+    choice StartNewTurn : Optional (Either (ContractId FundsPayment) (ContractId BuyProposal))
+      with diceRoll : (Int, Int)
+           activeProposals: [ContractId BuyProposal]
+           activeFunds: [ContractId FundsPayment]
+           activeReceipts: [ContractId Receipt]
+      controller bank
+      do
+
+        assert (length activeReceipts == 0)
+        assert (length activeFunds == 0)
+        assert (length activeProposals == 0)
+        (profilecid, playerProfile@Profile{..}) <- fetchByKey @Profile (turn, bank)
+
+        -- player in turn must be an element of subscribed players
+        assert (elem (turn, playerProfile.player) players)
+
+        -- new turn cannot start without ending previous turn
+        assert (length activeFunds == 0)
+        assert (0 < diceRoll._1 && 7 > diceRoll._1)
+        assert (0 < diceRoll._2 && 7 > diceRoll._2)
+
+        -- Calculate new square, new players order
+        let newsquare = move playerProfile.squareId diceRoll
+            rearrangedPlayers = rearrangeList (turn, playerProfile.player) (players)
+
+        -- arquive old square, create new
+        (sourceSquareCid, sourceSquare@Square{..}) <- fetchByKey (squareId, bank)
+        archive sourceSquareCid
+        create sourceSquare with
+          occupied = (delete turn sourceSquare.occupied)
+        
+        (targetSquareCid, targetSquare@Square{..}) <- fetchByKey (newsquare, bank)
+        archive targetSquareCid
+        create targetSquare with
+          occupied = (turn :: targetSquare.occupied)
+
+             -- update player profile
+        (profileCid, profile@Profile{..}) <- fetchByKey (this.turn, bank)
+        archive profileCid
+        create profile with
+          squareId = targetSquare.id
+
+        time <- getTime
+
+        -- check if buy rent or nothing (chance squares, luxury taxes)
+        result <- case (checkSquareOwnership turn targetSquare) of
+          Buy -> do 
+            x <- create BuyProposal with
+              value = targetSquare.value
+              bank
+              player = playerProfile.player
+              token = turn
+              squareId = targetSquare.id
+            return $ Some $ Right $ x
+          Rent -> do
+            x <- create FundsPayment with
+              value = targetSquare.value
+              bank
+              player = playerProfile.player
+              token = turn
+              squareId = targetSquare.id
+            return $ Some $ Left $ x
+          _ -> do
+            return None
+
+         -- create Turn contract
+        cid <- create Turn with
+          roll = diceRoll
+          timestamp = time
+          ..
+
+        -- recreate board with changes
+        create this with
+          players = rearrangedPlayers
+          turn = (head rearrangedPlayers)._1
+          turns = cid :: this.turns
+        return $ result
+
+    nonconsuming choice EndTurn : ()
+      with
+        activeProposals: [ContractId BuyProposal]
+        activeFundsPayment : [ContractId FundsPayment]
+        activeReceipts: [ContractId Receipt]
+      controller bank 
+      do
+        assert(length activeFundsPayment == 0)
+        assert(length activeReceipts == 0)
+        mapA_ archive activeProposals
+
+        allPlayersProfile <- mapA (\x -> do
+            (profileCid, playerProfile@Profile{balance}) <- fetchByKey (x._1, bank)
+            pure playerProfile
+          ) players
+
+        -- A funcionality to kick bankrupt players must be implemented
+        assert (checkIfNoProfileBankrupt allPlayersProfile)
+
+        pure()
+
+partyForBoardAllocation : Script (LedgerParties)
+partyForBoardAllocation = do
+  bank <- allocatePartyWithHint "Bank" (PartyIdHint "Bank")
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
+
+  aliceId <- validateUserId "alice"
+  bobId <- validateUserId "bob"
+  bankId <- validateUserId "bank"
+
+  createUser (User aliceId (Some alice)) [CanActAs alice]
+  createUser (User bobId (Some bob)) [CanActAs bob]
+  createUser (User bankId (Some bank)) [CanActAs bank]
+  
+
+  return LedgerParties with bank, players = [(Scottie, alice), (TopHat, bob)]
+
+
+
+setupBoard : Script (LedgerParties)
+setupBoard = script do
+-- party allocation
+  parties@LedgerParties{players,bank} <- partyForBoardAllocation
+
+-- create profiles
+  mapA_ (\x -> do 
+    submit parties.bank do 
+      createCmd Profile with
+        player = x._2
+        balance = 1500
+        token = x._1
+        squareId = 0
+        properties = []
+        ..
+    ) parties.players
+
+-- create all squares begin
+  boardList <- setupSquares bank players
+  mapA_ (\x -> submit bank do createCmd x) boardList
+-- create all squares end
+
+  board <- submit bank do
+    createCmd Board with
+      bank
+      players = parties.players
+      turn = ((head players)._1)
+      taxFunds = 0
+      turns = []
+
+  pure(parties)
+

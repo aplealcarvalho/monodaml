@@ -1,0 +1,522 @@
+module Test.Tests where
+
+import Game.Square
+import Game.Board
+import Game.Turn
+import Game.Data
+import Game.PlayerProfile
+
+import Daml.Script
+import DA.List ((!!), head)
+import DA.Optional (fromSome)
+import DA.Assert
+
+-- HAPPY PATHS 
+
+-- After one of the player moves to a property square, if it is not owned yet, then a proposal
+-- to buy will be issued. The player can then try and accept the proposal. Each square, source and target, are
+-- updated accordingly as it is the player profile
+playerMovesAndBuysPropertySuccessfully : Script ()
+playerMovesAndBuysPropertySuccessfully = script do
+  
+  -- parties, board, squares and profiles setup
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+
+  -- query for FundsPayment and Receipts
+  activeFundsDoubles <- query @FundsPayment alice
+  activeReceiptsDoubles <- query @Receipt alice
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  -- New Position should originate a new BuyProposal
+  Some (Right optionalContractsID) <- submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(proposalCid, _)] <- query @BuyProposal alice
+
+  -- Player will accept the buy proposal
+  submit alice do
+    exerciseCmd proposalCid AcceptProperty
+
+  -- A receipt will be issued
+  [(receiptCid, _)] <- query @Receipt alice
+
+  -- Bank will change ownership of the squares
+  submit bank do 
+    exerciseCmd receiptCid ChangeOwnership
+
+  Some (_, square@Square{owner}) <- queryContractKey bank (5, bank)
+  (fromSome square.owner) === Scottie
+  
+  pure()
+
+-- After one of the player moves to a property square, buys it and ends its
+-- turn, the second player will move to the exact same square. Since it's a property,
+-- a payment of funds will be issued
+
+playerMovesToOwnedPropertyAndTurnEndsAfterPayingRent : Script()
+playerMovesToOwnedPropertyAndTurnEndsAfterPayingRent = script do
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+
+  let alice = (head players)._2
+      bob = (players !! 1)._2
+
+  Some (_, alice1Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  Some (_, bob1Profile@Profile{balance}) <- queryContractKey @Profile bank ((players !! 1)._1, bank)
+
+  -- query for FundsPayment
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+  length activeFundsDoubles === 0
+
+  -- start turn for alice, buy property and change square
+  submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(proposalCid, _)] <- query @BuyProposal alice
+
+  submit alice do
+    exerciseCmd proposalCid AcceptProperty
+
+  [(receiptCid, _)] <- query @Receipt alice
+
+  submit bank do 
+    exerciseCmd receiptCid ChangeOwnership
+
+  Some (_, alice2Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  assert (alice1Profile.balance > alice2Profile.balance)
+
+  --  in this case, it is not need to end last turn because there's no payments pending
+  -- start new turn for bob
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+  length activeFundsDoubles === 0
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(fundsCid, _)] <- query @FundsPayment bob
+
+  submit bob do
+    exerciseCmd fundsCid Pay
+
+  [(receipt2Cid, _)] <- query @Receipt bob
+
+  submit bank do 
+    exerciseCmd receipt2Cid TransferFunds
+
+  -- Funds should have been transfered from Bob to Alice
+  Some (_, alice3Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  Some (_, bob2Profile@Profile{balance}) <- queryContractKey @Profile bank ((players !! 1)._1, bank)
+
+  assert (alice3Profile.balance == alice1Profile.balance)
+  assert (bob2Profile.balance < bob1Profile.balance)
+
+  pure()
+
+-- When the player completes a full turn of the board, comes back at the beginning
+
+fullTurnOfTheBoardAndBackToTheBeginning : Script ()
+fullTurnOfTheBoardAndBackToTheBeginning = script do
+
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+  let alice = (head players)._2
+
+  -- First round for both players
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+  length activeFundsDoubles === 0
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  -- second round for both players
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  -- third round for both players
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  Some (_, alice1Profile@Profile{squareId}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  Some (_, bob1Profile@Profile{squareId}) <- queryContractKey @Profile bank ((players !! 1)._1, bank)
+
+  -- fourth round for both players
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (6,6)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard EndTurn with
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFundsPayment = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  -- complete lap to the table for both players, check squareId turned itself
+
+  Some (_, alice2Profile@Profile{squareId}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  Some (_, bob2Profile@Profile{squareId}) <- queryContractKey @Profile bank ((players !! 1)._1, bank)
+
+  assert (alice2Profile.squareId < alice1Profile.squareId)
+  assert (bob2Profile.squareId < bob1Profile.squareId)
+
+  pure()
+
+
+-- END OF HAPPY PATHS
+
+-- UNHAPPY PATHS
+
+-- A player will try to buy a property for which he doesn't have enough funds to pay for
+playerTriesToBuyPropertyWithoutEnoughBalanceFails : Script()
+playerTriesToBuyPropertyWithoutEnoughBalanceFails = script do
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+  let alice = (head players)._2
+  
+  -- query for FundsPayment and Receipts
+  activeFundsDoubles <- query @FundsPayment alice
+  activeReceiptsDoubles <- query @Receipt alice
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  -- New Position should originate a new BuyProposal
+  Some (Right optionalContractsID) <- submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(proposalCid, _)] <- query @BuyProposal alice
+
+  -- Setting up profile with 0 balance
+  Some (alice1ProfileCid, alice1Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  submit bank do 
+    archiveCmd alice1ProfileCid
+  
+  submit bank do 
+    createCmd alice1Profile with balance = 0
+
+  -- Player will accept the buy proposal
+  receiptCid <- submit alice do
+    exerciseCmd proposalCid AcceptProperty
+
+  -- Try and change the property ownership, this must fail since there's not enough funds
+  submitMustFail bank do 
+    exerciseCmd receiptCid ChangeOwnership
+
+  pure ()
+
+
+-- Starting a new turn without closing the last one will lead to a failed choice
+newTurnCannotStartWithPendingPayments : Script()
+newTurnCannotStartWithPendingPayments = script do
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+  let alice = (head players)._2
+  
+  -- query for FundsPayment and Receipts
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  -- New Position should originate a new BuyProposal
+  Some (Right optionalContractsID) <- submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+
+  submitMustFail parties.bank do
+    exerciseCmd newboard StartNewTurn with
+      diceRoll = (2,3)
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  [(proposalCid, _)] <- query @BuyProposal alice
+
+  receiptCid <- submit alice do
+    exerciseCmd proposalCid AcceptProperty
+
+  submitMustFail parties.bank do
+    exerciseCmd newboard StartNewTurn with
+      diceRoll = (2,3)
+      activeProposals = map (._1) activeProposalsDoubles
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+
+  pure ()
+
+
+-- A player cannot try and buy a property owned by other if he's supposed to
+-- pay rent
+
+tryToBuyOwnedPropertyFails : Script ()
+tryToBuyOwnedPropertyFails = script do
+  parties@LedgerParties{players,bank} <- setupBoard
+  let alice = (head players)._2
+
+  Some (board, _) <- queryContractKey @Board bank bank
+  let alice = (head players)._2
+      bob = (players !! 1)._2
+
+  Some (_, alice1Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  Some (_, bob1Profile@Profile{balance}) <- queryContractKey @Profile bank ((players !! 1)._1, bank)
+
+  -- query for FundsPayment
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+  length activeFundsDoubles === 0
+
+  -- start turn for alice, buy property and change square
+  submit parties.bank do
+    exerciseCmd board StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(proposalCid, _)] <- query @BuyProposal alice
+
+  submit alice do
+    exerciseCmd proposalCid AcceptProperty
+
+  [(receiptCid, _)] <- query @Receipt alice
+
+  submit bank do 
+    exerciseCmd receiptCid ChangeOwnership
+
+  Some (_, alice2Profile@Profile{balance}) <- queryContractKey @Profile bank ((head players)._1, bank)
+  assert (alice1Profile.balance > alice2Profile.balance)
+
+  --  in this case, it is not need to end last turn because there's no payments pending
+  -- start new turn for bob
+  activeFundsDoubles <- query @FundsPayment bank
+  activeReceiptsDoubles <- query @Receipt bank
+  activeProposalsDoubles <- query @BuyProposal bank
+  length activeFundsDoubles === 0
+
+  Some (newboard, _) <- queryContractKey @Board bank bank
+
+  submit parties.bank do
+    exerciseCmd newboard StartNewTurn with 
+      diceRoll = (2,3)
+      activeFunds = map (._1) activeFundsDoubles
+      activeReceipts = map (._1) activeReceiptsDoubles
+      activeProposals = map (._1) activeProposalsDoubles
+
+  [(fundsCid, _)] <- query @FundsPayment bob
+
+  submit bob do
+    exerciseCmd fundsCid Pay
+
+  [(receipt2Cid, _)] <- query @Receipt bob
+
+  -- Since he's supposed to pay rent to alice, this exercise must fail
+  submitMustFail bank do 
+    exerciseCmd receipt2Cid ChangeOwnership
+
+  pure ()
+

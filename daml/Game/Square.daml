@@ -1,0 +1,23 @@
+module Game.Square where
+
+import Game.Data
+
+template Square
+  with
+    owner  : Optional PlayingTokens
+    bank : Party
+    name   : Text
+    players : [(PlayingTokens,Party)]
+    occupied : [PlayingTokens]
+    value : Int
+    id : Int
+    squareType : Optional SquareType
+    color : Optional Color
+  where
+    ensure name /= "" 
+    signatory bank
+    observer map (._2) players
+    key (id, bank) : (Int, Party)
+    maintainer key._2
+
+
