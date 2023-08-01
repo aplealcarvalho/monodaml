@@ -12,7 +12,7 @@ This is a first approach of implementing a monopoly game using DAML language. Th
 * Java 11 or greater
 * Daml SDK version 2.6.0-snapshot.20221218.11169.0.9d007b31
 
-For more info about setting up a proper environment to run a DAML project, check out [this](https://docs.daml.com/ops/requirements.html#)
+For more info about setting up a proper environment to run a DAML project, check out [this](https://docs.daml.com/ops/requirements.html#).
 
 # Start the Project
 On the root of the project simply:
