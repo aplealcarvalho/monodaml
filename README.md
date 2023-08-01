@@ -3,7 +3,7 @@
 
 # Daml Fundamentals Certification Mandatory Project
 
-Small project mandatory for completing the DAML Fundamentals Certification.
+Small project, mandatory for completing the DAML Fundamentals Certification.
 
 This is a first approach of implementing a monopoly game using DAML language. Though not every feature of the game is implemented (in fact, only the player movement along the board and the rent/buy properties were included yet), it was a theme that I enjoyed to abord and that I hope to continue to develop on my free time. 
 
